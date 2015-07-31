@@ -57,7 +57,7 @@ class FBackFlowNodelet : public nodelet::Nodelet
   image_transport::Publisher img_pub_;
   image_transport::Subscriber img_sub_;
   image_transport::CameraSubscriber cam_sub_;
-  ros::Publisher msg_pub_;
+  ros::Publisher flows_pub_;
 
   boost::shared_ptr<image_transport::ImageTransport> it_;
   ros::NodeHandle nh_, local_nh_;
@@ -66,7 +66,8 @@ class FBackFlowNodelet : public nodelet::Nodelet
   dynamic_reconfigure::Server<fback_flow::FBackFlowConfig> srv;
 
   bool debug_view_;
-  int subscriber_count_;
+  int image_subscriber_count_;
+  int flows_subscriber_count_;
   ros::Time prev_stamp_;
 
   std::string window_name_;
@@ -74,10 +75,15 @@ class FBackFlowNodelet : public nodelet::Nodelet
 
   cv::Mat prevgray, gray, flow, cflow;
 
+  int subscriberCount()
+  {
+    return image_subscriber_count_ + flows_subscriber_count_;
+  }
+
   void reconfigureCallback(fback_flow::FBackFlowConfig &new_config, uint32_t level)
   {
     config_ = new_config;
-    if (subscriber_count_)
+    if (subscriberCount())
     { // @todo Could do this without an interruption at some point.
       unsubscribe();
       subscribe();
@@ -128,54 +134,67 @@ class FBackFlowNodelet : public nodelet::Nodelet
 
       // Do the work
       cv::cvtColor( frame, gray, cv::COLOR_BGR2GRAY );
-      if( prevgray.data )
+      if( prevgray.data && subscriberCount() > 0)
       {
         cv::calcOpticalFlowFarneback(prevgray, gray, flow, 0.5, 3, 15, 3, 5, 1.2, 0);
-        cv::cvtColor(prevgray, cflow, cv::COLOR_GRAY2BGR);
-        //drawOptFlowMap(flow, cflow, 16, 1.5, Scalar(0, 255, 0));
+        if (image_subscriber_count_ > 0)
+        {
+          cv::cvtColor(prevgray, cflow, cv::COLOR_GRAY2BGR);
+        }
+
         int step = 16;
         cv::Scalar color = cv::Scalar(0, 255, 0);
-        for(int y = 0; y < cflow.rows; y += step)
-          for(int x = 0; x < cflow.cols; x += step)
+        for(int y = 0; y < flow.rows; y += step)
+          for(int x = 0; x < flow.cols; x += step)
         {
           const cv::Point2f& fxy = flow.at<cv::Point2f>(y, x);
-          cv::line(cflow, cv::Point(x,y), cv::Point(cvRound(x+fxy.x), cvRound(y+fxy.y)),
-                   color);
-          cv::circle(cflow, cv::Point(x,y), 2, color, -1);
-
-          opencv_apps::Flow flow_msg;
-          opencv_apps::Point2D point_msg;
-          opencv_apps::Point2D velocity_msg;
-          point_msg.x = x;
-          point_msg.y = y;
-          velocity_msg.x = fxy.x;
-          velocity_msg.y = fxy.y;
-          flow_msg.point = point_msg;
-          flow_msg.velocity = velocity_msg;
-          flows_msg.flow.push_back(flow_msg);
+          if (image_subscriber_count_ > 0)
+          {
+            cv::line(cflow, cv::Point(x,y), cv::Point(cvRound(x+fxy.x), cvRound(y+fxy.y)),
+                     color);
+            cv::circle(cflow, cv::Point(x,y), 2, color, -1);
+          }
+          if (flows_subscriber_count_ > 0)
+          {
+            opencv_apps::Flow flow_msg;
+            opencv_apps::Point2D point_msg;
+            opencv_apps::Point2D velocity_msg;
+            point_msg.x = x;
+            point_msg.y = y;
+            velocity_msg.x = fxy.x;
+            velocity_msg.y = fxy.y;
+            flow_msg.point = point_msg;
+            flow_msg.velocity = velocity_msg;
+            flows_msg.flow.push_back(flow_msg);
+          }
         }
       }
 
       std::swap(prevgray, gray);
+      prev_stamp_ = msg->header.stamp;
 
       //-- Show what you got
-      if( debug_view_) {
+      if(debug_view_) {
         cv::imshow( window_name_, cflow );
         int c = cv::waitKey(1);
       }
 
-
-      // Publish the image.
-      sensor_msgs::Image::Ptr out_img = cv_bridge::CvImage(msg->header, msg->encoding, cflow).toImageMsg();
-      img_pub_.publish(out_img);
-      msg_pub_.publish(flows_msg);
+      if (image_subscriber_count_ > 0)
+      {
+        // Publish the image.
+        sensor_msgs::Image::Ptr out_img = cv_bridge::CvImage(msg->header, msg->encoding, cflow).toImageMsg();
+        img_pub_.publish(out_img);
+      }
+      if (flows_subscriber_count_ > 0)
+      {
+        // Publish the flows.
+        flows_pub_.publish(flows_msg);
+      }
     }
     catch (cv::Exception &e)
     {
       NODELET_ERROR("Image processing error: %s %s %s %i", e.err.c_str(), e.func.c_str(), e.file.c_str(), e.line);
     }
-
-    prev_stamp_ = msg->header.stamp;
   }
 
   void subscribe()
@@ -196,30 +215,32 @@ class FBackFlowNodelet : public nodelet::Nodelet
 
   void img_connectCb(const image_transport::SingleSubscriberPublisher& ssp)
   {
-    if (subscriber_count_++ == 0) {
+    image_subscriber_count_++;
+    if (subscriberCount() == 1) {
       subscribe();
     }
   }
 
   void img_disconnectCb(const image_transport::SingleSubscriberPublisher&)
   {
-    subscriber_count_--;
-    if (subscriber_count_ == 0) {
+    image_subscriber_count_--;
+    if (subscriberCount() == 0) {
       unsubscribe();
     }
   }
 
-  void msg_connectCb(const ros::SingleSubscriberPublisher& ssp)
+  void flows_connectCb(const ros::SingleSubscriberPublisher& ssp)
   {
-    if (subscriber_count_++ == 0) {
+    flows_subscriber_count_++;
+    if (subscriberCount() == 1) {
       subscribe();
     }
   }
 
-  void msg_disconnectCb(const ros::SingleSubscriberPublisher&)
+  void flows_disconnectCb(const ros::SingleSubscriberPublisher&)
   {
-    subscriber_count_--;
-    if (subscriber_count_ == 0) {
+    flows_subscriber_count_--;
+    if (subscriberCount() == 0) {
       unsubscribe();
     }
   }
@@ -232,20 +253,21 @@ public:
     local_nh_ = ros::NodeHandle("~");
 
     local_nh_.param("debug_view", debug_view_, false);
-    subscriber_count_ = 0;
+    image_subscriber_count_ = 0;
+    flows_subscriber_count_ = 0;
     prev_stamp_ = ros::Time(0, 0);
 
     window_name_ = "flow";
 
     image_transport::SubscriberStatusCallback img_connect_cb    = boost::bind(&FBackFlowNodelet::img_connectCb, this, _1);
     image_transport::SubscriberStatusCallback img_disconnect_cb = boost::bind(&FBackFlowNodelet::img_disconnectCb, this, _1);
-    ros::SubscriberStatusCallback msg_connect_cb    = boost::bind(&FBackFlowNodelet::msg_connectCb, this, _1);
-    ros::SubscriberStatusCallback msg_disconnect_cb = boost::bind(&FBackFlowNodelet::msg_disconnectCb, this, _1);
+    ros::SubscriberStatusCallback flows_connect_cb    = boost::bind(&FBackFlowNodelet::flows_connectCb, this, _1);
+    ros::SubscriberStatusCallback flows_disconnect_cb = boost::bind(&FBackFlowNodelet::flows_disconnectCb, this, _1);
     img_pub_ = image_transport::ImageTransport(local_nh_).advertise("image", 1, img_connect_cb, img_disconnect_cb);
-    msg_pub_ = local_nh_.advertise<opencv_apps::FlowArrayStamped>("flows", 1, msg_connect_cb, msg_disconnect_cb);
+    flows_pub_ = local_nh_.advertise<opencv_apps::FlowArrayStamped>("flows", 1, flows_connect_cb, flows_disconnect_cb);
         
     if( debug_view_ ) {
-      subscriber_count_++;
+      image_subscriber_count_++;
     }
 
     dynamic_reconfigure::Server<fback_flow::FBackFlowConfig>::CallbackType f =
