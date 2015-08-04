@@ -75,6 +75,8 @@ class FBackFlowNodelet : public nodelet::Nodelet
 
   cv::Mat prevgray, gray, flow, cflow;
 
+  cv::Rect roi;
+
   int subscriberCount()
   {
     return image_subscriber_count_ + flows_subscriber_count_;
@@ -118,7 +120,8 @@ class FBackFlowNodelet : public nodelet::Nodelet
     try
     {
       // Convert the image into something opencv can handle.
-      cv::Mat frame = cv_bridge::toCvShare(msg, msg->encoding)->image;
+      cv::Mat frameAll = cv_bridge::toCvShare(msg, msg->encoding)->image;
+      cv::Mat frame = frameAll(roi);
 
       // Messages
       opencv_apps::FlowArrayStamped flows_msg;
@@ -258,6 +261,8 @@ public:
     image_subscriber_count_ = 0;
     flows_subscriber_count_ = 0;
     prev_stamp_ = ros::Time(0, 0);
+
+    roi = cv::Rect(100, 0, 520, 320);
 
     window_name_ = "flow";
 
