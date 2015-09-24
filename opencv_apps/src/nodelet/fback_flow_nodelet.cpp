@@ -145,8 +145,6 @@ class FBackFlowNodelet : public nodelet::Nodelet
           cv::cvtColor(prevgray, cflow, cv::COLOR_GRAY2BGR);
         }
 
-        ros::Duration time_delta = msg->header.stamp - prev_stamp_;
-        double time_delta_d = time_delta.sec + (time_delta.nsec / 1000000000.);
         int step = 16;
         cv::Scalar color = cv::Scalar(0, 255, 0);
         for(int y = 0; y < flow.rows; y += step)
@@ -166,8 +164,8 @@ class FBackFlowNodelet : public nodelet::Nodelet
             opencv_apps::Point2D velocity_msg;
             point_msg.x = x;
             point_msg.y = y;
-            velocity_msg.x = fxy.x / time_delta_d; // pixel per second
-            velocity_msg.y = fxy.y / time_delta_d; // pixel per second
+            velocity_msg.x = fxy.x;
+            velocity_msg.y = fxy.y;
             flow_msg.point = point_msg;
             flow_msg.velocity = velocity_msg;
             flows_msg.flow.push_back(flow_msg);
