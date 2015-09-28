@@ -3,11 +3,11 @@
 *
 *  Copyright (c) 2014, Kei Okada.
 *  All rights reserved.
-* 
+*
 *  Redistribution and use in source and binary forms, with or without
 *  modification, are permitted provided that the following conditions
 *  are met:
-* 
+*
 *   * Redistributions of source code must retain the above copyright
 *     notice, this list of conditions and the following disclaimer.
 *   * Redistributions in binary form must reproduce the above
@@ -17,7 +17,7 @@
 *   * Neither the name of the Kei Okada nor the names of its
 *     contributors may be used to endorse or promote products derived
 *     from this software without specific prior written permission.
-* 
+*
 *  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
 *  "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
 *  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
@@ -42,245 +42,156 @@
 #include <nodelet/nodelet.h>
 #include <image_transport/image_transport.h>
 #include <cv_bridge/cv_bridge.h>
+#include <sensor_msgs/image_encodings.h>
 
-#include <opencv2/highgui/highgui.hpp>
-#include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/video/tracking.hpp>
 
-#include <dynamic_reconfigure/server.h>
-#include "opencv_apps/FBackFlowConfig.h"
 #include "opencv_apps/FlowArrayStamped.h"
 
 namespace fback_flow {
+
 class FBackFlowNodelet : public nodelet::Nodelet
 {
-  image_transport::Publisher img_pub_;
-  image_transport::Subscriber img_sub_;
-  image_transport::CameraSubscriber cam_sub_;
-  ros::Publisher flows_pub_;
+private:
+	image_transport::Subscriber img_sub_;
+	ros::Publisher flows_pub_;
 
-  boost::shared_ptr<image_transport::ImageTransport> it_;
-  ros::NodeHandle nh_, local_nh_;
+	boost::shared_ptr<image_transport::ImageTransport> it_;
+	ros::NodeHandle nh_, pnh_;
 
-  fback_flow::FBackFlowConfig config_;
-  dynamic_reconfigure::Server<fback_flow::FBackFlowConfig> srv;
+	int flows_subscriber_count_;
 
-  bool debug_view_;
-  int image_subscriber_count_;
-  int flows_subscriber_count_;
-  ros::Time prev_stamp_;
+	cv::Mat prevgray_, gray_, flow_;
 
-  std::string window_name_;
-  static bool need_config_update_;
+	double pyr_scale_;
+	int levels_;
+	int winsize_;
+	int iterations_;
+	int poly_n_;
+	double poly_sigma_;
 
-  cv::Mat prevgray, gray, flow, cflow;
-
-  cv::Rect roi;
-
-  int subscriberCount()
-  {
-    return image_subscriber_count_ + flows_subscriber_count_;
-  }
-
-  void reconfigureCallback(fback_flow::FBackFlowConfig &new_config, uint32_t level)
-  {
-    config_ = new_config;
-    if (subscriberCount())
-    { // @todo Could do this without an interruption at some point.
-      unsubscribe();
-      subscribe();
-    }
-  }
-
-  const std::string &frameWithDefault(const std::string &frame, const std::string &image_frame)
-  {
-    if (frame.empty())
-      return image_frame;
-    return frame;
-  }
-
-  void imageCallbackWithInfo(const sensor_msgs::ImageConstPtr& msg, const sensor_msgs::CameraInfoConstPtr& cam_info)
-  {
-    do_work(msg, cam_info->header.frame_id);
-  }
-  
-  void imageCallback(const sensor_msgs::ImageConstPtr& msg)
-  {
-    do_work(msg, msg->header.frame_id);
-  }
-
-  static void trackbarCallback( int, void* )
-  {
-    need_config_update_ = true;
-  }
-
-  void do_work(const sensor_msgs::ImageConstPtr& msg, const std::string input_frame_from_msg)
-  {
-    // Work on the image.
-    try
-    {
-      // Convert the image into something opencv can handle.
-      cv::Mat frameAll = cv_bridge::toCvShare(msg, msg->encoding)->image;
-      cv::Mat frame = frameAll(roi);
-
-      // Messages
-      opencv_apps::FlowArrayStamped flows_msg;
-      flows_msg.header = msg->header;
-
-      if( debug_view_) {
-        cv::namedWindow( window_name_, cv::WINDOW_AUTOSIZE );
-        if (need_config_update_) {
-          srv.updateConfig(config_);
-          need_config_update_ = false;
-        }
-      }
-
-      // Do the work
-      cv::cvtColor( frame, gray, cv::COLOR_BGR2GRAY );
-      if( prevgray.data && subscriberCount() > 0)
-      {
-        cv::calcOpticalFlowFarneback(prevgray, gray, flow, 0.5, 3, 15, 3, 5, 1.2, 0);
-        if (image_subscriber_count_ > 0)
-        {
-          cv::cvtColor(prevgray, cflow, cv::COLOR_GRAY2BGR);
-        }
-
-        int step = 16;
-        cv::Scalar color = cv::Scalar(0, 255, 0);
-        for(int y = 0; y < flow.rows; y += step)
-          for(int x = 0; x < flow.cols; x += step)
-        {
-          const cv::Point2f& fxy = flow.at<cv::Point2f>(y, x);
-          if (image_subscriber_count_ > 0)
-          {
-            cv::line(cflow, cv::Point(x,y), cv::Point(cvRound(x+fxy.x), cvRound(y+fxy.y)),
-                     color);
-            cv::circle(cflow, cv::Point(x,y), 2, color, -1);
-          }
-          if (flows_subscriber_count_ > 0)
-          {
-            opencv_apps::Flow flow_msg;
-            opencv_apps::Point2D point_msg;
-            opencv_apps::Point2D velocity_msg;
-            point_msg.x = x;
-            point_msg.y = y;
-            velocity_msg.x = fxy.x;
-            velocity_msg.y = fxy.y;
-            flow_msg.point = point_msg;
-            flow_msg.velocity = velocity_msg;
-            flows_msg.flow.push_back(flow_msg);
-          }
-        }
-      }
-
-      std::swap(prevgray, gray);
-      prev_stamp_ = msg->header.stamp;
-
-      //-- Show what you got
-      if(debug_view_) {
-        cv::imshow( window_name_, cflow );
-        int c = cv::waitKey(1);
-      }
-
-      if (image_subscriber_count_ > 0)
-      {
-        // Publish the image.
-        sensor_msgs::Image::Ptr out_img = cv_bridge::CvImage(msg->header, msg->encoding, cflow).toImageMsg();
-        img_pub_.publish(out_img);
-      }
-      if (flows_subscriber_count_ > 0)
-      {
-        // Publish the flows.
-        flows_pub_.publish(flows_msg);
-      }
-    }
-    catch (cv::Exception &e)
-    {
-      NODELET_ERROR("Image processing error: %s %s %s %i", e.err.c_str(), e.func.c_str(), e.file.c_str(), e.line);
-    }
-  }
-
-  void subscribe()
-  {
-    NODELET_DEBUG("Subscribing to image topic.");
-    if (config_.use_camera_info)
-      cam_sub_ = it_->subscribeCamera("image", 3, &FBackFlowNodelet::imageCallbackWithInfo, this);
-    else
-      img_sub_ = it_->subscribe("image", 3, &FBackFlowNodelet::imageCallback, this);
-  }
-
-  void unsubscribe()
-  {
-    NODELET_DEBUG("Unsubscribing from image topic.");
-    img_sub_.shutdown();
-    cam_sub_.shutdown();
-  }
-
-  void img_connectCb(const image_transport::SingleSubscriberPublisher& ssp)
-  {
-    image_subscriber_count_++;
-    if (subscriberCount() == 1) {
-      subscribe();
-    }
-  }
-
-  void img_disconnectCb(const image_transport::SingleSubscriberPublisher&)
-  {
-    image_subscriber_count_--;
-    if (subscriberCount() == 0) {
-      unsubscribe();
-    }
-  }
-
-  void flows_connectCb(const ros::SingleSubscriberPublisher& ssp)
-  {
-    flows_subscriber_count_++;
-    if (subscriberCount() == 1) {
-      subscribe();
-    }
-  }
-
-  void flows_disconnectCb(const ros::SingleSubscriberPublisher&)
-  {
-    flows_subscriber_count_--;
-    if (subscriberCount() == 0) {
-      unsubscribe();
-    }
-  }
+	int subscriberCount();
+	void imageCallback(const sensor_msgs::ImageConstPtr& msg);
+	void subscribe();
+	void unsubscribe();
+	void flows_connectCb(const ros::SingleSubscriberPublisher& ssp);
+	void flows_disconnectCb(const ros::SingleSubscriberPublisher&);
 
 public:
-  virtual void onInit()
-  {
-    nh_ = getNodeHandle();
-    it_ = boost::shared_ptr<image_transport::ImageTransport>(new image_transport::ImageTransport(nh_));
-    local_nh_ = ros::NodeHandle("~");
-
-    local_nh_.param("debug_view", debug_view_, false);
-    image_subscriber_count_ = 0;
-    flows_subscriber_count_ = 0;
-    prev_stamp_ = ros::Time(0, 0);
-
-    roi = cv::Rect(100, 0, 520, 320);
-
-    window_name_ = "flow";
-
-    image_transport::SubscriberStatusCallback img_connect_cb    = boost::bind(&FBackFlowNodelet::img_connectCb, this, _1);
-    image_transport::SubscriberStatusCallback img_disconnect_cb = boost::bind(&FBackFlowNodelet::img_disconnectCb, this, _1);
-    ros::SubscriberStatusCallback flows_connect_cb    = boost::bind(&FBackFlowNodelet::flows_connectCb, this, _1);
-    ros::SubscriberStatusCallback flows_disconnect_cb = boost::bind(&FBackFlowNodelet::flows_disconnectCb, this, _1);
-    img_pub_ = image_transport::ImageTransport(local_nh_).advertise("image", 1, img_connect_cb, img_disconnect_cb);
-    flows_pub_ = local_nh_.advertise<opencv_apps::FlowArrayStamped>("flows", 1, flows_connect_cb, flows_disconnect_cb);
-        
-    if( debug_view_ ) {
-      image_subscriber_count_++;
-    }
-
-    dynamic_reconfigure::Server<fback_flow::FBackFlowConfig>::CallbackType f =
-      boost::bind(&FBackFlowNodelet::reconfigureCallback, this, _1, _2);
-    srv.setCallback(f);
-  }
+	virtual void onInit();
 };
-bool FBackFlowNodelet::need_config_update_ = false;
+
+int FBackFlowNodelet::subscriberCount()
+{
+	return flows_subscriber_count_;
+}
+
+void FBackFlowNodelet::imageCallback(const sensor_msgs::ImageConstPtr& msg)
+{
+	// Work on the image.
+	try {
+		// Convert the image into something opencv can handle.
+		cv::Mat frame = cv_bridge::toCvShare(msg, msg->encoding)->image;
+
+		// Messages
+		opencv_apps::FlowArrayStamped flows_msg;
+		flows_msg.header = msg->header;
+
+		// Do the work
+		cv::cvtColor( frame, gray_, cv::COLOR_BGR2GRAY );
+
+		if( prevgray_.data && subscriberCount() > 0) {
+			cv::calcOpticalFlowFarneback(prevgray_, gray_, flow_
+			                             , pyr_scale_
+			                             , levels_
+			                             , winsize_
+			                             , iterations_
+			                             , poly_n_
+			                             , poly_sigma_
+			                             , 0 // flags
+				);
+
+			int step = 1;
+			for(int y = 0; y < flow_.rows; y += step) {
+				for(int x = 0; x < flow_.cols; x += step) {
+					const cv::Point2f& fxy = flow_.at<cv::Point2f>(y, x);
+					if (flows_subscriber_count_ > 0) {
+						opencv_apps::Flow flow_msg;
+						opencv_apps::Point2D point_msg;
+						opencv_apps::Point2D velocity_msg;
+						point_msg.x = x;
+						point_msg.y = y;
+						velocity_msg.x = fxy.x;
+						velocity_msg.y = fxy.y;
+						flow_msg.point = point_msg;
+						flow_msg.velocity = velocity_msg;
+						flows_msg.flow.push_back(flow_msg);
+					}
+				}
+			}
+		}
+
+		std::swap(prevgray_, gray_);
+
+		if (flows_subscriber_count_ > 0 && flows_msg.flow.size() > 0) {
+			// Publish the flows.
+			flows_pub_.publish(flows_msg);
+		}
+	} catch (cv::Exception &e) {
+		NODELET_ERROR("Image processing error: %s %s %s %i", e.err.c_str(), e.func.c_str(), e.file.c_str(), e.line);
+	}
+}
+
+void FBackFlowNodelet::subscribe()
+{
+	NODELET_DEBUG("Subscribing to image topic.");
+	img_sub_ = it_->subscribe("image", 10, &FBackFlowNodelet::imageCallback, this);
+}
+
+void FBackFlowNodelet::unsubscribe()
+{
+	NODELET_DEBUG("Unsubscribing from image topic.");
+	img_sub_.shutdown();
+}
+
+void FBackFlowNodelet::flows_connectCb(const ros::SingleSubscriberPublisher& ssp)
+{
+	flows_subscriber_count_++;
+	if (subscriberCount() == 1) {
+		subscribe();
+	}
+}
+
+void FBackFlowNodelet::flows_disconnectCb(const ros::SingleSubscriberPublisher&)
+{
+	flows_subscriber_count_--;
+	if (subscriberCount() == 0) {
+		unsubscribe();
+	}
+}
+
+void FBackFlowNodelet::onInit()
+{
+	nh_ = getNodeHandle();
+	pnh_ = getPrivateNodeHandle();
+
+	pnh_.param("pyr_scale", pyr_scale_, 0.5);
+	pnh_.param("levels", levels_, 3);
+	pnh_.param("winsize", winsize_, 15);
+	pnh_.param("iterations", iterations_, 3);
+	pnh_.param("poly_n", poly_n_, 5);
+	pnh_.param("poly_sigma", poly_sigma_, 1.2);
+	
+	it_ = boost::shared_ptr<image_transport::ImageTransport>(new image_transport::ImageTransport(nh_));
+
+	flows_subscriber_count_ = 0;
+
+	ros::SubscriberStatusCallback flows_connect_cb    = boost::bind(&FBackFlowNodelet::flows_connectCb, this, _1);
+	ros::SubscriberStatusCallback flows_disconnect_cb = boost::bind(&FBackFlowNodelet::flows_disconnectCb, this, _1);
+
+	flows_pub_ = nh_.advertise<opencv_apps::FlowArrayStamped>("flows", 1, flows_connect_cb, flows_disconnect_cb);
+}
+
 }
 
 #include <pluginlib/class_list_macros.h>

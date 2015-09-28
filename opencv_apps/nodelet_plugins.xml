@@ -64,6 +64,10 @@
     <description>Nodelet of SimpleFlow optical flow algorithm</description>
   </class>
 
+  <class name="flow_drawer/flow_drawer" type="flow_drawer::FlowDrawerNodelet" base_class_type="nodelet::Nodelet">
+    <description>Nodelet to visualize optical flow.</description>
+  </class>
+
   <class name="watershed_segmentation/watershed_segmentation" type="watershed_segmentation::WatershedSegmentationNodelet" base_class_type="nodelet::Nodelet">
     <description>Nodelet to demonstrate the famous watershed segmentation algorithm in OpenCV: watershed()</description>
   </class>

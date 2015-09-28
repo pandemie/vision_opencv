@@ -20,7 +20,6 @@ generate_dynamic_reconfigure_options(
   cfg/GoodfeatureTrack.cfg
   #
   cfg/CamShift.cfg
-  cfg/FBackFlow.cfg
   cfg/LKFlow.cfg
   cfg/PeopleDetect.cfg
   cfg/PhaseCorr.cfg
@@ -176,6 +175,7 @@ add_library(${PROJECT_NAME} SHARED
   # video_homography.cpp
   # videostab.cpp
   src/nodelet/watershed_segmentation_nodelet.cpp
+  src/nodelet/flow_drawer_nodelet.cpp
   ${${PROJECT_NAME}_EXTRA_FILES}
 )
 
@@ -272,13 +272,17 @@ target_link_libraries(simple_flow_exe ${catkin_LIBRARIES} ${OpenCV_LIBRARIES})
   # video_dmtx.cpp
   # video_homography.cpp
 
+add_executable(flow_drawer_exe src/node/flow_drawer.cpp)
+SET_TARGET_PROPERTIES(flow_drawer_exe PROPERTIES OUTPUT_NAME flow_drawer)
+target_link_libraries(flow_drawer_exe ${catkin_LIBRARIES} ${OpenCV_LIBRARIES})
+
 add_executable(watershed_segmentation_exe src/node/watershed_segmentation.cpp)
 SET_TARGET_PROPERTIES(watershed_segmentation_exe PROPERTIES OUTPUT_NAME watershed_segmentation)
 target_link_libraries(watershed_segmentation_exe ${catkin_LIBRARIES} ${OpenCV_LIBRARIES})
 
 
 install(TARGETS edge_detection_exe hough_lines_exe hough_circles_exe face_detection_exe goodfeature_track_exe
-  camshift_exe fback_flow_exe lk_flow_exe people_detect_exe phase_corr_exe segment_objects_exe watershed_segmentation_exe
+  camshift_exe fback_flow_exe lk_flow_exe people_detect_exe phase_corr_exe segment_objects_exe flow_drawer_exe watershed_segmentation_exe
         DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 install(FILES nodelet_plugins.xml
